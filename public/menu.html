@@ -1,0 +1,67 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Menu</title><link rel="stylesheet" href="/style.css"></head>
+<body><div class="top"><span class="brand" id="rn">…</span><span class="muted" id="tn"></span></div><main style="max-width:720px" id="main"><p class="muted">Loading menu…</p></main>
+<script src="/socket.io/socket.io.js"></script><script src="/common.js"></script><script>
+const TOKEN = location.pathname.split('/').pop(); const B = `/public/${TOKEN}`;
+let data, cart = [], cat = 'all', track = null, tab = 'menu', phone = store.get('rbs_guest_phone') || '', gname = store.get('rbs_guest_name') || '';
+async function load() {
+  try { data = await get(B + '/menu'); } catch (e) { $('#main').innerHTML = `<div class="card b-bad">${esc(e.message)}</div>`; return; }
+  $('#rn').textContent = data.restaurant; $('#tn').textContent = `${data.branch} · Table ${data.table}`;
+  const s = io(); s.on('connect', () => s.emit('join-table', { qr: TOKEN }));
+  s.on('menu:changed', refreshMenu); s.on('orders:changed', refreshTrack);
+  await refreshTrack(); draw();
+}
+async function refreshMenu() { try { data = await get(B + '/menu'); cart = cart.filter(c => data.items.some(i => i.id === c.item.id)); draw(); } catch {} }
+async function refreshTrack() { try { track = await get(B + '/track'); if (tab === 'order') draw(); else drawTabs(); } catch {} }
+const total = () => cart.reduce((s, c) => s + (c.item.price + c.addons.reduce((a, n) => a + (c.item.addons.find(x => x.name === n)?.price || 0), 0)) * c.qty, 0);
+function drawTabs() { const t = $('#tabs'); if (t) t.innerHTML = tabsHtml(); bindTabs(); }
+const tabsHtml = () => `<span class="chip ${tab === 'menu' ? 'on' : ''}" data-tab="menu">Menu</span><span class="chip ${tab === 'order' ? 'on' : ''}" data-tab="order">My order${track && track.status !== 'none' ? ' · ' + esc(track.status) : ''}</span>`;
+function bindTabs() { document.querySelectorAll('[data-tab]').forEach(e => e.onclick = async () => { tab = e.dataset.tab; await refreshTrack(); draw(); }); }
+function draw() {
+  const items = data.items.filter(i => cat === 'all' || i.category_id === cat);
+  $('#main').innerHTML = `<div class="chips" id="tabs">${tabsHtml()}</div>` + (tab === 'order' ? orderView() : `
+    <div class="chips"><span class="chip ${cat === 'all' ? 'on' : ''}" data-c="all">All</span>${data.categories.map(c => `<span class="chip ${cat === c.id ? 'on' : ''}" data-c="${c.id}">${esc(c.name)}</span>`).join('')}</div>
+    ${items.map(i => `<div class="card mt row">${i.image_path ? `<img src="${esc(i.image_path)}" width="64" height="64" style="object-fit:cover;border-radius:8px" alt="">` : ''}<div class="grow"><span class="dot ${i.veg ? 'veg' : 'nonveg'}"></span><b>${esc(i.name)}</b><div class="small muted">${esc(i.description || '')}</div><div>${inr(i.price)}</div></div><button class="primary" data-i="${i.id}">Add</button></div>`).join('') || '<p class="muted">Nothing available right now.</p>'}
+    ${cart.length ? `<div class="card mt" style="position:sticky;bottom:.5rem;box-shadow:0 4px 20px #0003"><table>${cart.map((c, n) => `<tr><td>${esc(c.item.name)}${c.addons.length ? `<div class="small muted">+ ${esc(c.addons.join(', '))}</div>` : ''}</td><td class="right"><button class="sm" data-q="${n}:-1">−</button> ${c.qty} <button class="sm" data-q="${n}:1">＋</button></td></tr>`).join('')}</table>
+    <div class="row"><div class="grow"><label>Name</label><input id="gn" value="${esc(gname)}"></div><div class="grow"><label>Phone ${data.loyalty ? '(earn coins)' : ''}</label><input id="gp" inputmode="numeric" value="${esc(phone)}"></div></div>
+    <div class="row mt"><b class="grow">Items ${inr(total())} <span class="small muted">+ GST</span></b><button class="primary" id="place">Place order</button></div></div>` : ''}`);
+  bindTabs();
+  document.querySelectorAll('[data-c]').forEach(e => e.onclick = () => { cat = e.dataset.c === 'all' ? 'all' : +e.dataset.c; draw(); });
+  document.querySelectorAll('[data-i]').forEach(e => e.onclick = () => add(+e.dataset.i));
+  document.querySelectorAll('[data-q]').forEach(e => e.onclick = () => { const [n, d] = e.dataset.q.split(':').map(Number); cart[n].qty += d; if (cart[n].qty < 1) cart.splice(n, 1); draw(); });
+  $('#place') && ($('#place').onclick = guard(place));
+  $('#pay') && ($('#pay').onclick = guard(pay));
+  $('#rv') && ($('#rv').onclick = reviewModal);
+}
+function add(id) {
+  const item = data.items.find(i => i.id === id);
+  const push = (addons, note) => { const ex = cart.find(c => c.item.id === id && c.addons.join() === addons.join() && c.note === note); ex ? ex.qty++ : cart.push({ item, qty: 1, addons, note }); draw(); };
+  if (!item.addons.length) return push([], '');
+  modal(`<h3>${esc(item.name)}</h3>${item.addons.map(a => `<label class="row" style="color:var(--ink)"><input type="checkbox" style="width:auto" value="${esc(a.name)}"> ${esc(a.name)} (+${inr(a.price)})</label>`).join('')}<label>Note for kitchen</label><input id="nt"><div class="row mt"><button class="primary" id="ok">Add</button></div>`,
+    m => m.querySelector('#ok').onclick = () => { push([...m.querySelectorAll('input[type=checkbox]:checked')].map(x => x.value), m.querySelector('#nt').value); m.remove(); });
+}
+async function place() {
+  gname = $('#gn').value; phone = $('#gp').value; store.set('rbs_guest_phone', phone); store.set('rbs_guest_name', gname);
+  const r = await post(B + '/order', { customer_name: gname, customer_phone: phone, items: cart.map(c => ({ item_id: c.item.id, qty: c.qty, addons: c.addons, note: c.note })) });
+  cart = []; tab = 'order'; toast('Order placed!'); await refreshTrack(); draw();
+}
+const STEPS = { new: 'Order received', preparing: 'Being prepared', ready: 'Ready — on its way!' };
+function orderView() {
+  if (!track || track.status === 'none') return `<div class="card muted">No open order. After your bill is paid, thank you! ${data.can_review ? '<div class="mt"><button id="rv">Leave a review</button></div>' : ''}</div>`;
+  return `<div class="card"><h2>${esc(STEPS[track.status] || track.status)}</h2><div class="row small muted">${['new', 'preparing', 'ready'].map(s => `<span class="badge ${['new', 'preparing', 'ready'].indexOf(s) <= ['new', 'preparing', 'ready'].indexOf(track.status) ? 'b-ok' : 'b-mute'}">${s}</span>`).join('')}</div>
+  <table class="mt">${track.items.map(i => `<tr><td>${i.qty}× ${esc(i.name)}</td></tr>`).join('')}</table><p><b>Total ${inr(track.bill.total)}</b> <span class="small muted">incl. GST</span></p>
+  <div class="row"><button class="primary" id="pay">Pay online (UPI / card)</button><span class="small muted grow">Or just pay at the counter — your server will bring the bill.</span></div>${data.mock_payments ? '<p class="small b-warn">Demo mode: no Razorpay keys configured, so payment is simulated.</p>' : ''}
+  <p class="small muted">Want more? Go to the Menu tab and add items — they join this order.</p></div>`;
+}
+async function pay() {
+  const g = await post(B + '/pay');
+  const verify = async (rp) => { const r = await post(B + '/pay/verify', { ...rp, order_id: g.order_id }); toast('Paid ✓ Invoice ' + r.invoice, 5000); track = { status: 'none' }; await refreshTrack(); draw(); };
+  if (g.mock) { if (confirm(`Simulate paying ${inr(g.amount_rupees)}?`)) await verify({ razorpay_order_id: g.gateway_order_id, razorpay_payment_id: 'pay_mock_' + Date.now(), razorpay_signature: 'mock_signature' }); return; }
+  await new Promise((res, rej) => { if (window.Razorpay) return res(); const s = document.createElement('script'); s.src = 'https://checkout.razorpay.com/v1/checkout.js'; s.onload = res; s.onerror = () => rej(new Error('Could not load payment page')); document.head.append(s); });
+  new Razorpay({ key: g.key_id, amount: g.amount, currency: 'INR', name: data.restaurant, order_id: g.gateway_order_id, handler: guard(verify) }).open();
+}
+function reviewModal() {
+  modal(`<h3>How was it?</h3><label>Rating (1-5)</label><select id="rt">${[5, 4, 3, 2, 1].map(n => `<option>${n}</option>`).join('')}</select><label>Comments</label><textarea id="tx" rows="3"></textarea><label class="row" style="color:var(--ink)"><input type="checkbox" id="cm" style="width:auto"> This is a complaint (goes to the manager only)</label><div class="row mt"><button class="primary" id="go">Send</button></div>`,
+    m => m.querySelector('#go').onclick = guard(async () => { await post(B + '/review', { rating: +m.querySelector('#rt').value, text: m.querySelector('#tx').value, name: gname, complaint: m.querySelector('#cm').checked }); m.remove(); toast('Thank you!'); }));
+}
+load();
+</script></body></html>

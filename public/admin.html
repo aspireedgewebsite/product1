@@ -1,0 +1,75 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Platform Admin</title><link rel="stylesheet" href="/style.css"></head>
+<body><div class="top"><span class="brand">⚙️ Platform admin</span><nav id="nav"></nav><button class="sm" onclick="logout()">Sign out</button></div><main id="main"></main>
+<script src="/common.js"></script><script>
+let meta, plans, tenants;
+const TABS = [['tenants','Tenants'],['plans','Plan builder'],['analytics','Analytics'],['billing','Billing & coupons'],['audit','Audit log']];
+let tab = location.hash.slice(1) || 'tenants';
+$('#nav').innerHTML = TABS.map(([k,l]) => `<a data-v="${k}">${l}</a>`).join('');
+$('#nav').onclick = (e) => e.target.dataset.v && show(e.target.dataset.v);
+const pill = (s) => `<span class="badge ${{active:'b-ok',trial:'b-info',expired:'b-warn',suspended:'b-bad',none:'b-mute'}[s]||'b-mute'}">${esc(s)}</span>`;
+async function show(t) {
+  tab = t; location.hash = t; document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.v === t));
+  try { await T[t](); } catch (e) { $('#main').innerHTML = `<div class="card b-bad">${esc(e.message)}</div>`; }
+}
+const T = {};
+T.tenants = async () => {
+  [tenants, plans] = await Promise.all([get('/admin/tenants'), get('/admin/plans')]);
+  $('#main').innerHTML = `<div class="row"><h2 class="grow">Restaurants (${tenants.length})</h2><button class="primary" id="new">＋ New tenant</button></div><div class="card mt"><table><tr><th>Name</th><th>Status</th><th>Plan</th><th>Ends</th><th>Outlets</th><th>Users</th><th>Orders 30d</th><th></th></tr>
+  ${tenants.map(t => `<tr><td><b>${esc(t.name)}</b><div class="small muted">${esc(t.slug)}</div></td><td>${pill(t.effective_status)}</td><td>${esc(t.plan||'—')}</td><td class="small">${esc((t.ends||'').slice(0,10))}</td><td>${t.outlets}</td><td>${t.users}</td><td>${t.orders_30d}</td><td><button class="sm" data-m="${t.id}">Manage</button></td></tr>`).join('')}</table></div>`;
+  $('#new').onclick = () => modal(`<h3>New tenant</h3><label>Restaurant name</label><input id="n"><label>Owner name</label><input id="on"><label>Owner email</label><input id="oe" type="email"><label>Owner password</label><input id="op" type="password"><label>Plan (starts a free trial)</label><select id="pl">${plans.map(p=>`<option value="${p.id}">${esc(p.name)} — ₹${p.price_monthly}/mo, ${p.trial_days}-day trial</option>`).join('')}</select><div class="row mt"><button class="primary" id="go">Create</button></div>`,
+    md => md.querySelector('#go').onclick = guard(async () => { await post('/admin/tenants', {name:md.querySelector('#n').value, owner_name:md.querySelector('#on').value, owner_email:md.querySelector('#oe').value, owner_password:md.querySelector('#op').value, plan_id:+md.querySelector('#pl').value}); md.remove(); T.tenants(); }));
+  $('#main').querySelectorAll('[data-m]').forEach(b => b.onclick = () => manage(+b.dataset.m));
+};
+async function manage(id) {
+  if (!meta) meta = await get('/admin/meta');
+  const d = await get('/admin/tenants/' + id); const ov = Object.fromEntries(d.overrides.map(o => [o.kind + ':' + o.key, o]));
+  const m = modal('', null); m.firstChild.style.maxWidth = '760px';
+  m.firstChild.innerHTML = `<div class="row"><h2 class="grow">${esc(d.name)}</h2>${pill(d.status)}</div>
+  <p class="small muted">Plan: <b>${esc(d.sub?.plan_name)}</b> (${esc(d.sub?.status)}) until ${esc((d.sub?.end_at||'').slice(0,10))} · usage: ${d.usage.branches} branches, ${d.usage.tables} tables, ${d.usage.managers} managers, ${d.usage.staff} staff</p>
+  <div class="row"><button data-st="active">Mark active</button><button class="danger" data-st="suspended">Suspend</button><button data-imp>Log in as tenant</button></div>
+  <h3 class="mt">Subscription</h3><div class="row"><select id="sp" style="width:auto">${plans.map(p=>`<option value="${p.id}" ${p.id===d.sub?.plan_id?'selected':''}>${esc(p.name)}</option>`).join('')}</select><select id="sc" style="width:auto"><option value="monthly">Monthly</option><option value="yearly">Yearly (~17% off)</option></select><input id="scp" placeholder="Coupon" style="width:110px"><button class="primary" id="ssave">Renew / change plan</button><input id="ext" type="number" placeholder="days" style="width:80px"><button id="sext">Manual extension</button></div>
+  <h3 class="mt">Module overrides <span class="small muted">(override beats the plan; optional expiry)</span></h3>
+  <table>${Object.entries(meta.features).map(([k,l]) => { const o = ov['feature:'+k], eff = d.effective.features[k]; return `<tr><td>${esc(l)}</td><td>${eff?'<span class="badge b-ok">on</span>':'<span class="badge b-mute">off</span>'}${o?` <span class="small muted">override ${o.value?'ON':'OFF'}${o.expires_at?' until '+o.expires_at.slice(0,10):''}</span>`:''}</td><td class="right"><button class="sm" data-o="feature:${k}:1">Force on</button> <button class="sm" data-o="feature:${k}:0">Force off</button> ${o?`<button class="sm" data-o="feature:${k}:x">Clear</button>`:''}</td></tr>`; }).join('')}</table>
+  <div class="row small"><span>Expiry for next override:</span><input type="date" id="exp" style="width:auto"></div>
+  <h3 class="mt">Limits</h3><table>${Object.entries(meta.limits).map(([k,l]) => { const o = ov['limit:'+k]; return `<tr><td>${esc(l)}</td><td>${d.effective.limits[k]}${o?' <span class="small muted">(override)</span>':''}</td><td class="right"><button class="sm" data-l="${k}">Set override</button>${o?` <button class="sm" data-l="${k}:x">Clear</button>`:''}</td></tr>`; }).join('')}</table>
+  <h3 class="mt">Users</h3><table>${d.users.map(u=>`<tr><td>${esc(u.name)}<div class="small muted">${esc(u.email)}</div></td><td>${esc(u.role)}</td><td class="right"><button class="sm" data-rp="${u.id}">Reset password</button></td></tr>`).join('')}</table>
+  <div class="row mt"><button data-cm>View complaints</button></div>`;
+  const reload = () => { m.remove(); manage(id); };
+  m.querySelectorAll('[data-st]').forEach(b => b.onclick = guard(async () => { await api('PATCH', `/admin/tenants/${id}/status`, {status:b.dataset.st}); reload(); }));
+  m.querySelector('[data-imp]').onclick = guard(async () => { const r = await post(`/admin/tenants/${id}/impersonate`); store.set('rbs_token', r.token); location.href = '/app.html'; });
+  m.querySelector('#ssave').onclick = guard(async () => { const r = await post(`/admin/tenants/${id}/subscription`, {plan_id:+m.querySelector('#sp').value, cycle:m.querySelector('#sc').value, coupon:m.querySelector('#scp').value||undefined}); toast('Plan set. Invoice amount ' + inr(r.amount)); reload(); });
+  m.querySelector('#sext').onclick = guard(async () => { await post(`/admin/tenants/${id}/subscription`, {plan_id:+m.querySelector('#sp').value, extend_days:+m.querySelector('#ext').value}); toast('Extended'); reload(); });
+  m.querySelectorAll('[data-o]').forEach(b => b.onclick = guard(async () => { const [kind,key,v] = b.dataset.o.split(':'); await put(`/admin/tenants/${id}/overrides`, {kind, key, value: v==='x'?null:+v, expires_at: m.querySelector('#exp').value||undefined}); reload(); }));
+  m.querySelectorAll('[data-l]').forEach(b => b.onclick = guard(async () => { const [key,x] = b.dataset.l.split(':'); if (x==='x') await put(`/admin/tenants/${id}/overrides`, {kind:'limit', key, value:null}); else { const v = prompt('New limit for ' + key); if (v===null) return; await put(`/admin/tenants/${id}/overrides`, {kind:'limit', key, value:+v, expires_at: m.querySelector('#exp').value||undefined}); } reload(); }));
+  m.querySelectorAll('[data-rp]').forEach(b => b.onclick = guard(async () => { const r = await post(`/admin/users/${b.dataset.rp}/reset-password`); prompt('New temporary password (copy it):', r.password); }));
+  m.querySelector('[data-cm]').onclick = guard(async () => { const c = await get(`/admin/tenants/${id}/complaints`); modal(`<h3>Complaints</h3>${c.map(x=>`<p>${esc(x.text)} <span class="badge ${x.status==='open'?'b-bad':'b-ok'}">${x.status}</span></p>`).join('')||'<p class="muted">None.</p>'}`); });
+}
+T.plans = async () => {
+  [meta, plans] = await Promise.all([get('/admin/meta'), get('/admin/plans')]);
+  $('#main').innerHTML = `<div class="row"><h2 class="grow">Plan builder</h2><button class="primary" id="np">＋ New plan</button></div><p class="muted small">Tick the modules each plan includes and set numeric limits. Changes apply to every tenant on that plan immediately (per-tenant overrides still win).</p>
+  <div class="grid g2">${plans.map(p => `<div class="card" data-plan="${p.id}"><div class="row"><input class="grow" data-f="name" value="${esc(p.name)}"></div><div class="row"><div class="grow"><label>₹/month</label><input data-f="price_monthly" type="number" value="${p.price_monthly}"></div><div class="grow"><label>₹/year</label><input data-f="price_yearly" type="number" value="${p.price_yearly}"></div><div class="grow"><label>Trial days</label><input data-f="trial_days" type="number" value="${p.trial_days}"></div></div>
+  <h3 class="mt">Limits</h3><div class="row">${Object.entries(meta.limits).map(([k,l]) => `<div class="grow"><label>${esc(l)}</label><input data-l="${k}" type="number" value="${p.limits[k]||0}" style="min-width:70px"></div>`).join('')}</div>
+  <h3 class="mt">Modules</h3>${Object.entries(meta.features).map(([k,l]) => `<label class="row" style="margin:.1rem 0;color:var(--ink)"><input type="checkbox" style="width:auto" data-k="${k}" ${p.features[k]?'checked':''}> ${esc(l)}</label>`).join('')}<div class="row mt"><button class="primary" data-save>Save plan</button></div></div>`).join('')}</div>`;
+  const read = (c) => ({ name:c.querySelector('[data-f=name]').value, price_monthly:c.querySelector('[data-f=price_monthly]').value, price_yearly:c.querySelector('[data-f=price_yearly]').value, trial_days:c.querySelector('[data-f=trial_days]').value,
+    limits:Object.fromEntries([...c.querySelectorAll('[data-l]')].map(i=>[i.dataset.l,+i.value])), features:Object.fromEntries([...c.querySelectorAll('[data-k]')].map(i=>[i.dataset.k,i.checked])) });
+  $('#main').querySelectorAll('[data-plan]').forEach(c => c.querySelector('[data-save]').onclick = guard(async () => { await put('/admin/plans/' + c.dataset.plan, read(c)); toast('Plan saved'); }));
+  $('#np').onclick = guard(async () => { const n = prompt('Plan name'); if (n) { await post('/admin/plans', {name:n, features:{}, limits:{}}); T.plans(); } });
+};
+T.analytics = async () => {
+  const a = await get('/admin/analytics'), c = a.counts;
+  $('#main').innerHTML = `<h2>Platform analytics</h2><div class="grid g4"><div class="card"><div class="stat">${inr(a.mrr)}</div><div class="stat-l">MRR</div></div><div class="card"><div class="stat">${inr(a.arr)}</div><div class="stat-l">ARR (MRR×12)</div></div><div class="card"><div class="stat">${a.trial_to_paid}%</div><div class="stat-l">Trial → paid</div></div><div class="card"><div class="stat">${a.churn_pct}%</div><div class="stat-l">Expired/suspended</div></div><div class="card"><div class="stat">${c.active}</div><div class="stat-l">Paying</div></div><div class="card"><div class="stat">${c.trial}</div><div class="stat-l">On trial</div></div><div class="card"><div class="stat">${inr(a.revenue_total)}</div><div class="stat-l">Subscription revenue booked</div></div></div>
+  <div class="card mt"><h3>Feature usage (tenants with module enabled)</h3>${a.feature_usage.map(f => `<div class="row small"><span style="width:140px">${esc(f.feature)}</span><div class="grow"><div class="bar" style="width:${c.total?f.tenants/c.total*100:0}%"></div></div><span style="width:30px" class="right">${f.tenants}</span></div>`).join('')}</div>`;
+};
+T.billing = async () => {
+  const [inv, cp] = await Promise.all([get('/admin/invoices'), get('/admin/coupons')]);
+  $('#main').innerHTML = `<div class="grid g2"><div class="card"><h2>Platform coupons</h2><div class="row"><input id="c" placeholder="CODE" style="width:120px;text-transform:uppercase"><input id="p" type="number" placeholder="% off" style="width:90px"><input id="u" type="number" placeholder="Limit" style="width:90px"><button class="primary" id="ad">Add</button></div><table class="mt">${cp.filter(c=>c.active).map(c=>`<tr><td><b>${esc(c.code)}</b></td><td>${c.percent}%</td><td>${c.used}${c.usage_limit?'/'+c.usage_limit:''}</td><td><button class="sm danger" data-d="${c.id}">✕</button></td></tr>`).join('')}</table></div>
+  <div class="card"><h2>Subscription invoices</h2><table>${inv.map(i=>`<tr><td>${esc(i.tenant_name)}</td><td>${esc(i.plan_name)} ${esc(i.cycle)}</td><td class="right">${inr(i.amount)}</td><td class="small muted">${esc(i.coupon_code||'')}</td><td class="small">${esc(i.created_at.slice(0,10))}</td></tr>`).join('')||'<tr><td class="muted">None yet.</td></tr>'}</table></div></div>`;
+  $('#ad').onclick = guard(async () => { await post('/admin/coupons', {code:$('#c').value, percent:$('#p').value, usage_limit:$('#u').value}); T.billing(); });
+  $('#main').querySelectorAll('[data-d]').forEach(b => b.onclick = guard(async () => { await del('/admin/coupons/' + b.dataset.d); T.billing(); }));
+};
+T.audit = async () => {
+  const a = await get('/admin/audit');
+  $('#main').innerHTML = `<h2>Audit log</h2><div class="card"><table><tr><th>When</th><th>Who</th><th>Tenant</th><th>Action</th><th>Detail</th></tr>${a.map(x=>`<tr><td class="small">${esc(x.created_at)}</td><td>${esc(x.user_email||'guest')}</td><td>${esc(x.tenant_name||'—')}</td><td>${esc(x.action)}</td><td class="small muted">${esc(x.detail)}</td></tr>`).join('')}</table></div>`;
+};
+get('/auth/me').then(u => { if (u.role !== 'platform_admin') location.href = '/app.html'; else show(TABS.some(t=>t[0]===tab)?tab:'tenants'); }).catch(() => location.href = '/');
+</script></body></html>
