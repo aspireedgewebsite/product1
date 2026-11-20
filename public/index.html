@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Restaurant Billing System</title><link rel="stylesheet" href="/style.css"></head>
+<body><div class="login"><h1>🍽️ Restaurant Billing</h1><p class="muted">Sign in to your restaurant or the platform admin panel.</p>
+<form class="card" id="f"><label>Email</label><input id="e" type="email" required autofocus><label>Password</label><input id="p" type="password" required>
+<p id="err" class="b-bad small"></p><button class="primary" style="width:100%">Sign in</button></form>
+<details class="card mt small"><summary>Demo logins (after <code>npm run seed</code>)</summary><p>Platform: admin@platform.test / admin123<br>Owner: owner@spice.test / demo123<br>Manager: manager@spice.test · Cashier: cashier@spice.test · Waiter: waiter@spice.test · Kitchen: kitchen@spice.test (all demo123)<br>Starter plan demo: owner@chai.test / demo123</p></details></div>
+<script src="/common.js"></script><script>
+$('#f').onsubmit=async(ev)=>{ev.preventDefault();try{const r=await post('/auth/login',{email:$('#e').value,password:$('#p').value});store.set('rbs_token',r.token);location.href=r.user.role==='platform_admin'?'/admin.html':'/app.html'}catch(e){$('#err').textContent=e.message}};
+if(token)get('/auth/me').then(u=>location.href=u.role==='platform_admin'?'/admin.html':'/app.html').catch(()=>{});
+</script></body></html>

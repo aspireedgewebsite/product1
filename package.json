@@ -1,0 +1,18 @@
+{
+  "name": "restaurant-billing-system",
+  "version": "2.0.0",
+  "description": "Multi-tenant restaurant billing SaaS: POS, KOT, kitchen display, QR ordering, plan/feature-flag engine and platform admin",
+  "main": "server/index.js",
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "start": "node server/index.js",
+    "seed": "node server/seed.js",
+    "test": "node server/smoke-test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "socket.io": "^4.7.5"
+  }
+}
